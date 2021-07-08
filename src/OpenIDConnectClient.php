@@ -22,6 +22,24 @@
 
 namespace Jumbojett;
 
+use Error;
+use Exception;
+use Jumbojett\Exception\OpenIDConnectConfigException;
+use Jumbojett\Exception\OpenIDConnectCurlException;
+use Jumbojett\Exception\OpenIDConnectJwkException;
+use Jumbojett\Exception\OpenIDConnectJWTException;
+use Jumbojett\Exception\OpenIDConnectPHPExtensionException;
+use Jumbojett\Exception\OpenIDConnectProviderException;
+use Jumbojett\Exception\OpenIDConnectRandException;
+use Jumbojett\Exception\OpenIDConnectScopeException;
+use Jumbojett\Exception\OpenIDConnectStateException;
+use phpseclib\Crypt\RSA;
+
+use function bin2hex;
+use function is_object;
+use function is_string;
+use function random_bytes;
+
 /**
  *
  * JWT signature verification support by Jonathan Reed <jdreed@mit.edu>
@@ -62,23 +80,14 @@ function b64url2b64($base64url) {
     return strtr($base64url, '-_', '+/');
 }
 
-
-/**
- * OpenIDConnect Exception Class
- */
-class OpenIDConnectClientException extends \Exception
-{
-
-}
-
 /**
  * Require the CURL and JSON PHP extensions to be installed
  */
 if (!function_exists('curl_init')) {
-    throw new OpenIDConnectClientException('OpenIDConnect needs the CURL PHP extension.');
+    throw new OpenIDConnectPHPExtensionException('OpenIDConnect needs the CURL PHP extension.');
 }
 if (!function_exists('json_decode')) {
-    throw new OpenIDConnectClientException('OpenIDConnect needs the JSON PHP extension.');
+    throw new OpenIDConnectPHPExtensionException('OpenIDConnect needs the JSON PHP extension.');
 }
 
 /**
@@ -185,8 +194,8 @@ class OpenIDConnectClient
     private $wellKnown = false;
 
     /**
-     * @var mixed holds well-known opendid configuration parameters, like policy for MS Azure AD B2C User Flow  
-     * @see https://docs.microsoft.com/en-us/azure/active-directory-b2c/user-flow-overview 
+     * @var mixed holds well-known opendid configuration parameters, like policy for MS Azure AD B2C User Flow
+     * @see https://docs.microsoft.com/en-us/azure/active-directory-b2c/user-flow-overview
      */
     private $wellKnownConfigParameters = array();
 
@@ -256,7 +265,7 @@ class OpenIDConnectClient
         $this->clientSecret = $client_secret;
 
         $this->issuerValidator = function($iss){
-	        return ($iss === $this->getIssuer() || $iss === $this->getWellKnownIssuer() || $iss === $this->getWellKnownIssuer(true));
+            return ($iss === $this->getIssuer() || $iss === $this->getWellKnownIssuer() || $iss === $this->getWellKnownIssuer(true));
         };
     }
 
@@ -283,40 +292,46 @@ class OpenIDConnectClient
 
     /**
      * @return bool
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectProviderException
+     * @throws OpenIDConnectStateException
+     * @throws OpenIDConnectScopeException
+     * @throws OpenIDConnectJWTException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectJwkException
+     * @throws OpenIDConnectPHPExtensionException
+     * @throws OpenIDConnectRandException
      */
     public function authenticate() {
-
         // Do a preemptive check to see if the provider has thrown an error from a previous redirect
         if (isset($_REQUEST['error'])) {
             $desc = isset($_REQUEST['error_description']) ? ' Description: ' . $_REQUEST['error_description'] : '';
-            throw new OpenIDConnectClientException('Error: ' . $_REQUEST['error'] .$desc);
+            throw new OpenIDConnectProviderException('Error: ' . $_REQUEST['error'] . $desc);
         }
 
         // If we have an authorization code then proceed to request a token
         if (isset($_REQUEST['code'])) {
-
             $code = $_REQUEST['code'];
             $token_json = $this->requestTokens($code);
 
             // Throw an error if the server returns one
             if (isset($token_json->error)) {
                 if (isset($token_json->error_description)) {
-                    throw new OpenIDConnectClientException($token_json->error_description);
+                    throw new OpenIDConnectProviderException($token_json->error_description);
                 }
-                throw new OpenIDConnectClientException('Got response: ' . $token_json->error);
+                throw new OpenIDConnectProviderException('Got response: ' . $token_json->error);
             }
 
             // Do an OpenID Connect session check
             if ($_REQUEST['state'] !== $this->getState()) {
-                throw new OpenIDConnectClientException('Unable to determine state');
+                throw new OpenIDConnectStateException('Unable to determine state');
             }
 
             // Cleanup state
             $this->unsetState();
 
             if (!property_exists($token_json, 'id_token')) {
-                throw new OpenIDConnectClientException('User did not authorize openid scope.');
+                throw new OpenIDConnectScopeException('User did not authorize openid scope.');
             }
 
             $claims = $this->decodeJWT($token_json->id_token, 1);
@@ -324,10 +339,10 @@ class OpenIDConnectClient
             // Verify the signature
             if ($this->canVerifySignatures()) {
                 if (!$this->getProviderConfigValue('jwks_uri')) {
-                    throw new OpenIDConnectClientException ('Unable to verify signature due to no jwks_uri being defined');
+                    throw new OpenIDConnectJWTException('Unable to verify signature due to no jwks_uri being defined');
                 }
                 if (!$this->verifyJWTsignature($token_json->id_token)) {
-                    throw new OpenIDConnectClientException ('Unable to verify signature');
+                    throw new OpenIDConnectJWTException('Unable to verify signature');
                 }
             } else {
                 user_error('Warning: JWT signature verification unavailable.');
@@ -341,7 +356,6 @@ class OpenIDConnectClient
 
             // If this is a valid claim
             if ($this->verifyJWTclaims($claims, $token_json->access_token)) {
-
                 // Clean up the session a little
                 $this->unsetNonce();
 
@@ -358,10 +372,9 @@ class OpenIDConnectClient
 
                 // Success!
                 return true;
-
             }
 
-            throw new OpenIDConnectClientException ('Unable to verify JWT claims');
+            throw new OpenIDConnectJWTException('Unable to verify JWT claims');
         }
 
         if ($this->allowImplicitFlow && isset($_REQUEST['id_token'])) {
@@ -375,7 +388,7 @@ class OpenIDConnectClient
 
             // Do an OpenID Connect session check
             if ($_REQUEST['state'] !== $this->getState()) {
-                throw new OpenIDConnectClientException('Unable to determine state');
+                throw new OpenIDConnectStateException('Unable to determine state');
             }
 
             // Cleanup state
@@ -386,10 +399,10 @@ class OpenIDConnectClient
             // Verify the signature
             if ($this->canVerifySignatures()) {
                 if (!$this->getProviderConfigValue('jwks_uri')) {
-                    throw new OpenIDConnectClientException ('Unable to verify signature due to no jwks_uri being defined');
+                    throw new OpenIDConnectJWTException('Unable to verify signature due to no jwks_uri being defined');
                 }
                 if (!$this->verifyJWTsignature($id_token)) {
-                    throw new OpenIDConnectClientException ('Unable to verify signature');
+                    throw new OpenIDConnectJWTException('Unable to verify signature');
                 }
             } else {
                 user_error('Warning: JWT signature verification unavailable.');
@@ -400,7 +413,6 @@ class OpenIDConnectClient
 
             // If this is a valid claim
             if ($this->verifyJWTclaims($claims, $accessToken)) {
-
                 // Clean up the session a little
                 $this->unsetNonce();
 
@@ -414,15 +426,13 @@ class OpenIDConnectClient
 
                 // Success!
                 return true;
-
             }
 
-            throw new OpenIDConnectClientException ('Unable to verify JWT claims');
+            throw new OpenIDConnectJWTException('Unable to verify JWT claims');
         }
 
         $this->requestAuthorization();
         return false;
-
     }
 
     /**
@@ -434,8 +444,9 @@ class OpenIDConnectClient
      * @param string|null $redirect URL to which the RP is requesting that the End-User's User Agent
      * be redirected after a logout has been performed. The value MUST have been previously
      * registered with the OP. Value can be null.
-     *
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectProviderException
      */
     public function signOut($accessToken, $redirect) {
         $signout_endpoint = $this->getProviderConfigValue('end_session_endpoint');
@@ -443,8 +454,7 @@ class OpenIDConnectClient
         $signout_params = null;
         if($redirect === null){
             $signout_params = array('id_token_hint' => $accessToken);
-        }
-        else {
+        } else {
             $signout_params = array(
                 'id_token_hint' => $accessToken,
                 'post_logout_redirect_uri' => $redirect);
@@ -487,12 +497,13 @@ class OpenIDConnectClient
      *
      * @param string $param
      * @param string $default optional
-     * @throws OpenIDConnectClientException
      * @return string
      *
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectProviderException
      */
     protected function getProviderConfigValue($param, $default = null) {
-
         // If the configuration value is not available, attempt to fetch it from a well known config endpoint
         // This is also known as auto "discovery"
         if (!isset($this->providerConfig[$param])) {
@@ -507,12 +518,13 @@ class OpenIDConnectClient
      *
      * @param string $param
      * @param string $default optional
-     * @throws OpenIDConnectClientException
      * @return string
      *
+     * @throws OpenIDConnectProviderException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
      */
     private function getWellKnownConfigValue($param, $default = null) {
-
         // If the configuration value is not available, attempt to fetch it from a well known config endpoint
         // This is also known as auto "discovery"
         if(!$this->wellKnown) {
@@ -520,7 +532,7 @@ class OpenIDConnectClient
             if (count($this->wellKnownConfigParameters) > 0){
                 $well_known_config_url .= '?' .  http_build_query($this->wellKnownConfigParameters) ;
             }
-            $this->wellKnown = json_decode($this->fetchURL($well_known_config_url));
+            $this->wellKnown = json_decode($this->fetchURL($well_known_config_url), false);
         }
 
         $value = false;
@@ -537,14 +549,13 @@ class OpenIDConnectClient
             return $default;
         }
 
-        throw new OpenIDConnectClientException("The provider {$param} could not be fetched. Make sure your provider has a well known configuration available.");
+        throw new OpenIDConnectProviderException("The provider {$param} could not be fetched. Make sure your provider has a well known configuration available.");
     }
 
     /**
-     * Set optionnal parameters for .well-known/openid-configuration 
+     * Set optionnal parameters for .well-known/openid-configuration
      *
-     * @param string $param
-     *
+     * @param array $params
      */
     public function setWellKnownConfigParameters(array $params = []){
         $this->wellKnownConfigParameters=$params;
@@ -566,7 +577,6 @@ class OpenIDConnectClient
      * @return string
      */
     public function getRedirectURL() {
-
         // If the redirect URL has been set then return it.
         if (property_exists($this, 'redirectURL') && $this->redirectURL) {
             return $this->redirectURL;
@@ -610,27 +620,29 @@ class OpenIDConnectClient
      * Used for arbitrary value generation for nonces and state
      *
      * @return string
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectRandException
      */
     protected function generateRandString() {
         // Error and Exception need to be catched in this order, see https://github.com/paragonie/random_compat/blob/master/README.md
         // random_compat polyfill library should be removed if support for PHP versions < 7 is dropped
         try {
-            return \bin2hex(\random_bytes(16));
+            return bin2hex(random_bytes(16));
         } catch (Error $e) {
-            throw new OpenIDConnectClientException('Random token generation failed.');
+            throw new OpenIDConnectRandException('Random token generation failed.');
         } catch (Exception $e) {
-            throw new OpenIDConnectClientException('Random token generation failed.');
-        };
+            throw new OpenIDConnectRandException('Random token generation failed.');
+        }
     }
 
     /**
      * Start Here
      * @return void
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectRandException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectProviderException
      */
     private function requestAuthorization() {
-
         $auth_endpoint = $this->getProviderConfigValue('authorization_endpoint');
         $response_type = 'code';
 
@@ -683,8 +695,9 @@ class OpenIDConnectClient
 
     /**
      * Requests a client credentials token
-     *
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectProviderException
      */
     public function requestClientCredentialsToken() {
         $token_endpoint = $this->getProviderConfigValue('token_endpoint');
@@ -703,7 +716,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $post_params = http_build_query($post_data, null, '&', $this->enc_type);
 
-        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers));
+        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
     }
 
 
@@ -712,8 +725,10 @@ class OpenIDConnectClient
      * (Defined in https://tools.ietf.org/html/rfc6749#section-4.3)
      *
      * @param boolean $bClientAuth Indicates that the Client ID and Secret be used for client authentication
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectProviderException
      * @return mixed
-     * @throws OpenIDConnectClientException
      */
     public function requestResourceOwnerToken($bClientAuth = FALSE) {
         $token_endpoint = $this->getProviderConfigValue('token_endpoint');
@@ -743,7 +758,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $post_params = http_build_query($post_data, null, '&', $this->enc_type);
 
-        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers));
+        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
     }
 
 
@@ -752,7 +767,9 @@ class OpenIDConnectClient
      *
      * @param string $code
      * @return mixed
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectProviderException
      */
     protected function requestTokens($code) {
         $token_endpoint = $this->getProviderConfigValue('token_endpoint');
@@ -774,7 +791,7 @@ class OpenIDConnectClient
         if (in_array('client_secret_basic', $token_endpoint_auth_methods_supported, true)) {
             $headers = ['Authorization: Basic ' . base64_encode(urlencode($this->clientID) . ':' . urlencode($this->clientSecret))];
             unset($token_params['client_secret']);
-	        unset($token_params['client_id']);
+            unset($token_params['client_id']);
         }
 
         if (!empty($this->getCodeChallengeMethod()) && !empty($this->getCodeVerifier())) {
@@ -789,7 +806,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $token_params = http_build_query($token_params, null, '&', $this->enc_type);
 
-        $this->tokenResponse = json_decode($this->fetchURL($token_endpoint, $token_params, $headers));
+        $this->tokenResponse = json_decode($this->fetchURL($token_endpoint, $token_params, $headers), false);
 
         return $this->tokenResponse;
     }
@@ -799,7 +816,9 @@ class OpenIDConnectClient
      *
      * @param string $refresh_token
      * @return mixed
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectProviderException
      */
     public function refreshToken($refresh_token) {
         $token_endpoint = $this->getProviderConfigValue('token_endpoint');
@@ -816,7 +835,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $token_params = http_build_query($token_params, null, '&', $this->enc_type);
 
-        $json = json_decode($this->fetchURL($token_endpoint, $token_params));
+        $json = json_decode($this->fetchURL($token_endpoint, $token_params), false);
 
         if (isset($json->access_token)) {
             $this->accessToken = $json->access_token;
@@ -832,7 +851,7 @@ class OpenIDConnectClient
     /**
      * @param array $keys
      * @param array $header
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectJwkException
      * @return object
      */
     private function get_key_for_header($keys, $header) {
@@ -861,10 +880,10 @@ class OpenIDConnectClient
             }
         }
         if (isset($header->kid)) {
-            throw new OpenIDConnectClientException('Unable to find a key for (algorithm, kid):' . $header->alg . ', ' . $header->kid . ')');
+            throw new OpenIDConnectJwkException('Unable to find a key for (algorithm, kid):' . $header->alg . ', ' . $header->kid . ')');
         }
 
-        throw new OpenIDConnectClientException('Unable to find a key for RSA');
+        throw new OpenIDConnectJwkException('Unable to find a key for RSA');
     }
 
 
@@ -875,14 +894,15 @@ class OpenIDConnectClient
      * @param $signature
      * @param $signatureType
      * @return bool
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectJWTException
+     * @throws OpenIDConnectPHPExtensionException
      */
     private function verifyRSAJWTsignature($hashtype, $key, $payload, $signature, $signatureType) {
         if (!class_exists('\phpseclib\Crypt\RSA') && !class_exists('Crypt_RSA')) {
-            throw new OpenIDConnectClientException('Crypt_RSA support unavailable.');
+            throw new OpenIDConnectPHPExtensionException('Crypt_RSA support unavailable.');
         }
         if (!(property_exists($key, 'n') && property_exists($key, 'e'))) {
-            throw new OpenIDConnectClientException('Malformed key object');
+            throw new OpenIDConnectJWTException('Malformed key object');
         }
 
         /* We already have base64url-encoded data, so re-encode it as
@@ -901,13 +921,13 @@ class OpenIDConnectClient
             $rsa->loadKey($public_key_xml, Crypt_RSA::PUBLIC_FORMAT_XML);
             $rsa->signatureMode = $signatureType === 'PSS' ? Crypt_RSA::SIGNATURE_PSS : Crypt_RSA::SIGNATURE_PKCS1;
         } else {
-            $rsa = new \phpseclib\Crypt\RSA();
+            $rsa = new RSA();
             $rsa->setHash($hashtype);
             if ($signatureType === 'PSS') {
                 $rsa->setMGFHash($hashtype);
             }
-            $rsa->loadKey($public_key_xml, \phpseclib\Crypt\RSA::PUBLIC_FORMAT_XML);
-            $rsa->signatureMode = $signatureType === 'PSS' ? \phpseclib\Crypt\RSA::SIGNATURE_PSS : \phpseclib\Crypt\RSA::SIGNATURE_PKCS1;
+            $rsa->loadKey($public_key_xml, RSA::PUBLIC_FORMAT_XML);
+            $rsa->signatureMode = $signatureType === 'PSS' ? RSA::SIGNATURE_PSS : RSA::SIGNATURE_PKCS1;
         }
         return $rsa->verify($payload, $signature);
     }
@@ -918,12 +938,12 @@ class OpenIDConnectClient
      * @param $payload
      * @param $signature
      * @return bool
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectPHPExtensionException
      */
     private function verifyHMACJWTsignature($hashtype, $key, $payload, $signature)
     {
         if (!function_exists('hash_hmac')) {
-            throw new OpenIDConnectClientException('hash_hmac support unavailable.');
+            throw new OpenIDConnectPHPExtensionException('hash_hmac support unavailable.');
         }
 
         $expected=hash_hmac($hashtype, $payload, $key, true);
@@ -937,32 +957,37 @@ class OpenIDConnectClient
 
     /**
      * @param string $jwt encoded JWT
-     * @throws OpenIDConnectClientException
      * @return bool
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectJWTException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectPHPExtensionException
+     * @throws OpenIDConnectJwkException
+     * @throws OpenIDConnectProviderException
      */
     public function verifyJWTsignature($jwt) {
-        if (!\is_string($jwt)) {
-            throw new OpenIDConnectClientException('Error token is not a string');
+        if (!is_string($jwt)) {
+            throw new OpenIDConnectJWTException('Error token is not a string');
         }
         $parts = explode('.', $jwt);
         if (!isset($parts[0])) {
-            throw new OpenIDConnectClientException('Error missing part 0 in token');
+            throw new OpenIDConnectJWTException('Error missing part 0 in token');
         }
         $signature = base64url_decode(array_pop($parts));
         if (false === $signature || '' === $signature) {
-            throw new OpenIDConnectClientException('Error decoding signature from token');
+            throw new OpenIDConnectJWTException('Error decoding signature from token');
         }
-        $header = json_decode(base64url_decode($parts[0]));
-        if (null === $header || !\is_object($header)) {
-            throw new OpenIDConnectClientException('Error decoding JSON from token header');
+        $header = json_decode(base64url_decode($parts[0]), false);
+        if (null === $header || !is_object($header)) {
+            throw new OpenIDConnectJWTException('Error decoding JSON from token header');
         }
         $payload = implode('.', $parts);
-        $jwks = json_decode($this->fetchURL($this->getProviderConfigValue('jwks_uri')));
-        if ($jwks === NULL) {
-            throw new OpenIDConnectClientException('Error decoding JSON from jwks_uri');
+        $jwks = json_decode($this->fetchURL($this->getProviderConfigValue('jwks_uri')), false);
+        if ($jwks === null) {
+            throw new OpenIDConnectJWTException('Error decoding JSON from jwks_uri');
         }
         if (!isset($header->alg)) {
-            throw new OpenIDConnectClientException('Error missing signature type in token header');
+            throw new OpenIDConnectJWTException('Error missing signature type in token header');
         }
         switch ($header->alg) {
             case 'RS256':
@@ -983,7 +1008,7 @@ class OpenIDConnectClient
                 $verified = $this->verifyHMACJWTsignature($hashtype, $this->getClientSecret(), $payload, $signature);
                 break;
             default:
-                throw new OpenIDConnectClientException('No support for signature type: ' . $header->alg);
+                throw new OpenIDConnectJWTException('No support for signature type: ' . $header->alg);
         }
         return $verified;
     }
@@ -1030,9 +1055,8 @@ class OpenIDConnectClient
      * @return object
      */
     protected function decodeJWT($jwt, $section = 0) {
-
         $parts = explode('.', $jwt);
-        return json_decode(base64url_decode($parts[$section]));
+        return json_decode(base64url_decode($parts[$section]), false);
     }
 
     /**
@@ -1061,10 +1085,11 @@ class OpenIDConnectClient
      *
      * @return mixed
      *
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectProviderException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
      */
     public function requestUserInfo($attribute = null) {
-
         $user_info_endpoint = $this->getProviderConfigValue('userinfo_endpoint');
         $schema = 'openid';
 
@@ -1072,16 +1097,18 @@ class OpenIDConnectClient
 
         //The accessToken has to be sent in the Authorization header.
         // Accept json to indicate response type
-        $headers = ["Authorization: Bearer {$this->accessToken}",
-            'Accept: application/json'];
+        $headers = [
+            "Authorization: Bearer {$this->accessToken}",
+            'Accept: application/json'
+        ];
 
-        $user_json = json_decode($this->fetchURL($user_info_endpoint,null,$headers));
-        if ($this->getResponseCode() <> 200) {
-            throw new OpenIDConnectClientException('The communication to retrieve user data has failed with status code '.$this->getResponseCode());
+        $user_json = json_decode($this->fetchURL($user_info_endpoint, null, $headers), false);
+        if ($this->getResponseCode() !== 200) {
+            throw new OpenIDConnectProviderException('The communication to retrieve user data has failed with status code ' . $this->getResponseCode());
         }
         $this->userInfo = $user_json;
 
-        if($attribute === null) {
+        if ($attribute === null) {
             return $this->userInfo;
         }
 
@@ -1112,7 +1139,6 @@ class OpenIDConnectClient
      *
      */
     public function getVerifiedClaims($attribute = null) {
-
         if($attribute === null) {
             return $this->verifiedClaims;
         }
@@ -1128,12 +1154,10 @@ class OpenIDConnectClient
      * @param string $url
      * @param string | null $post_body string If this is set the post type will be POST
      * @param array $headers Extra headers to be send with the request. Format as 'NameHeader: ValueHeader'
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectCurlException
      * @return mixed
      */
     protected function fetchURL($url, $post_body = null, $headers = array()) {
-
-
         // OK cool - then let's create a new cURL resource handle
         $ch = curl_init();
 
@@ -1148,13 +1172,12 @@ class OpenIDConnectClient
             $content_type = 'application/x-www-form-urlencoded';
 
             // Determine if this is a JSON payload and add the appropriate content type
-            if (is_object(json_decode($post_body))) {
+            if (is_object(json_decode($post_body, false))) {
                 $content_type = 'application/json';
             }
 
             // Add POST-specific headers
             $headers[] = "Content-Type: {$content_type}";
-
         }
 
         // If we set some headers include them
@@ -1209,7 +1232,7 @@ class OpenIDConnectClient
         $this->responseCode = $info['http_code'];
 
         if ($output === false) {
-            throw new OpenIDConnectClientException('Curl error: (' . curl_errno($ch) . ') ' . curl_error($ch));
+            throw new OpenIDConnectCurlException('Curl error: (' . curl_errno($ch) . ') ' . curl_error($ch));
         }
 
         // Close the cURL resource, and free system resources
@@ -1221,21 +1244,21 @@ class OpenIDConnectClient
     /**
      * @param bool $appendSlash
      * @return string
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectProviderException
      */
     public function getWellKnownIssuer($appendSlash = false) {
-
         return $this->getWellKnownConfigValue('issuer') . ($appendSlash ? '/' : '');
     }
 
     /**
      * @return string
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectConfigException
      */
     public function getIssuer() {
-
         if (!isset($this->providerConfig['issuer'])) {
-            throw new OpenIDConnectClientException('The issuer has not been set');
+            throw new OpenIDConnectConfigException('The issuer has not been set');
         }
 
         return $this->providerConfig['issuer'];
@@ -1243,11 +1266,11 @@ class OpenIDConnectClient
 
     /**
      * @return mixed
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectConfigException
      */
     public function getProviderURL() {
         if (!isset($this->providerConfig['providerUrl'])) {
-            throw new OpenIDConnectClientException('The provider URL has not been set');
+            throw new OpenIDConnectConfigException('The provider URL has not been set');
         }
 
         return $this->providerConfig['providerUrl'];
@@ -1368,10 +1391,11 @@ class OpenIDConnectClient
     /**
      * Dynamic registration
      *
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectProviderException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
      */
     public function register() {
-
         $registration_endpoint = $this->getProviderConfigValue('registration_endpoint');
 
         $send_object = (object ) array_merge($this->registrationParams, array(
@@ -1381,15 +1405,15 @@ class OpenIDConnectClient
 
         $response = $this->fetchURL($registration_endpoint, json_encode($send_object));
 
-        $json_response = json_decode($response);
+        $json_response = json_decode($response, false);
 
         // Throw some errors if we encounter them
         if ($json_response === false) {
-            throw new OpenIDConnectClientException('Error registering: JSON response received from the server was invalid.');
+            throw new OpenIDConnectProviderException('Error registering: JSON response received from the server was invalid.');
         }
 
         if (isset($json_response->{'error_description'})) {
-            throw new OpenIDConnectClientException($json_response->{'error_description'});
+            throw new OpenIDConnectProviderException($json_response->{'error_description'});
         }
 
         $this->setClientID($json_response->{'client_id'});
@@ -1399,10 +1423,9 @@ class OpenIDConnectClient
         if (isset($json_response->{'client_secret'})) {
             $this->setClientSecret($json_response->{'client_secret'});
         } else {
-            throw new OpenIDConnectClientException('Error registering:
+            throw new OpenIDConnectProviderException('Error registering:
                                                     Please contact the OpenID Connect provider and obtain a Client ID and Secret directly from them');
         }
-
     }
 
     /**
@@ -1414,7 +1437,9 @@ class OpenIDConnectClient
      * @param string|null $clientId
      * @param string|null $clientSecret
      * @return mixed
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectProviderException
      */
     public function introspectToken($token, $token_type_hint = '', $clientId = null, $clientSecret = null) {
         $introspection_endpoint = $this->getProviderConfigValue('introspection_endpoint');
@@ -1433,7 +1458,7 @@ class OpenIDConnectClient
         $headers = ['Authorization: Basic ' . base64_encode(urlencode($clientId) . ':' . urlencode($clientSecret)),
             'Accept: application/json'];
 
-        return json_decode($this->fetchURL($introspection_endpoint, $post_params, $headers));
+        return json_decode($this->fetchURL($introspection_endpoint, $post_params, $headers), false);
     }
 
     /**
@@ -1445,7 +1470,9 @@ class OpenIDConnectClient
      * @param string|null $clientId
      * @param string|null $clientSecret
      * @return mixed
-     * @throws OpenIDConnectClientException
+     * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectCurlException
+     * @throws OpenIDConnectProviderException
      */
     public function revokeToken($token, $token_type_hint = '', $clientId = null, $clientSecret = null) {
         $revocation_endpoint = $this->getProviderConfigValue('revocation_endpoint');
@@ -1464,7 +1491,7 @@ class OpenIDConnectClient
         $headers = ['Authorization: Basic ' . base64_encode(urlencode($clientId) . ':' . urlencode($clientSecret)),
             'Accept: application/json'];
 
-        return json_decode($this->fetchURL($revocation_endpoint, $post_params, $headers));
+        return json_decode($this->fetchURL($revocation_endpoint, $post_params, $headers), false);
     }
 
     /**
@@ -1755,8 +1782,7 @@ class OpenIDConnectClient
 
     public function setUrlEncoding($curEncoding)
     {
-        switch ($curEncoding)
-        {
+        switch ($curEncoding) {
             case PHP_QUERY_RFC1738:
                 $this->enc_type = PHP_QUERY_RFC1738;
                 break;
@@ -1765,10 +1791,9 @@ class OpenIDConnectClient
                 $this->enc_type = PHP_QUERY_RFC3986;
                 break;
 
-        	default:
+            default:
                 break;
         }
-
     }
 
     /**
