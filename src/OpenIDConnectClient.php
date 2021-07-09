@@ -33,6 +33,7 @@ use Jumbojett\Exception\OpenIDConnectProviderException;
 use Jumbojett\Exception\OpenIDConnectRandException;
 use Jumbojett\Exception\OpenIDConnectScopeException;
 use Jumbojett\Exception\OpenIDConnectStateException;
+use Jumbojett\Exception\OpenIDConnectUnauthorizedException;
 use phpseclib\Crypt\RSA;
 
 use function bin2hex;
@@ -1088,6 +1089,7 @@ class OpenIDConnectClient
      * @throws OpenIDConnectProviderException
      * @throws OpenIDConnectCurlException
      * @throws OpenIDConnectConfigException
+     * @throws OpenIDConnectUnauthorizedException
      */
     public function requestUserInfo($attribute = null) {
         $user_info_endpoint = $this->getProviderConfigValue('userinfo_endpoint');
@@ -1104,6 +1106,9 @@ class OpenIDConnectClient
 
         $user_json = json_decode($this->fetchURL($user_info_endpoint, null, $headers), false);
         if ($this->getResponseCode() !== 200) {
+            if ($this->getResponseCode() === 401) {
+                throw new OpenIDConnectUnauthorizedException('You are not authorized to retrieve user data');
+            }
             throw new OpenIDConnectProviderException('The communication to retrieve user data has failed with status code ' . $this->getResponseCode());
         }
         $this->userInfo = $user_json;
