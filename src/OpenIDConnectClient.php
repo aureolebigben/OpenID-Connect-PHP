@@ -858,11 +858,11 @@ class OpenIDConnectClient
         $json = json_decode($this->fetchURL($token_endpoint, $token_params, $headers), false);
 
         // Throw an error if the server returns one
-        if (isset($token_json->error)) {
-            if (isset($token_json->error_description)) {
-                throw new OpenIDConnectProviderException($token_json->error_description);
+        if (isset($json->error)) {
+            if (isset($json->error_description)) {
+                throw new OpenIDConnectProviderException($json->error_description);
             }
-            throw new OpenIDConnectProviderException('Got response: ' . $token_json->error);
+            throw new OpenIDConnectProviderException('Got response: ' . $json->error);
         }
 
         if (isset($json->access_token)) {
