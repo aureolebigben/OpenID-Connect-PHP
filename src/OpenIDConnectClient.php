@@ -830,6 +830,7 @@ class OpenIDConnectClient
      * @throws OpenIDConnectCurlException
      * @throws OpenIDConnectConfigException
      * @throws OpenIDConnectProviderException
+     * @throws OpenIDConnectUnauthorizedException
      */
     public function refreshToken($refresh_token) {
         $token_endpoint = $this->getProviderConfigValue('token_endpoint');
@@ -860,6 +861,9 @@ class OpenIDConnectClient
         // Throw an error if the server returns one
         if (isset($json->error)) {
             if (isset($json->error_description)) {
+                if ($json->error === 'invalid_grant') {
+                    throw new OpenIDConnectUnauthorizedException($json->error_description);
+                }
                 throw new OpenIDConnectProviderException($json->error_description);
             }
             throw new OpenIDConnectProviderException('Got response: ' . $json->error);
