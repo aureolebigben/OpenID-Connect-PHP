@@ -836,17 +836,34 @@ class OpenIDConnectClient
 
         $grant_type = 'refresh_token';
 
+        $headers = [];
+
         $token_params = array(
             'grant_type' => $grant_type,
             'refresh_token' => $refresh_token,
-            'client_id' => $this->clientID,
-            'client_secret' => $this->clientSecret,
         );
+
+        $token_endpoint_auth_methods_supported = $this->getProviderConfigValue('token_endpoint_auth_methods_supported',
+            ['client_secret_basic']);
+        if (in_array('client_secret_basic', $token_endpoint_auth_methods_supported, true)) {
+            $headers = ['Authorization: Basic ' . base64_encode(urlencode($this->clientID) . ':' . urlencode($this->clientSecret))];
+        } else {
+            $token_params['client_id'] = $this->clientID;
+            $token_params['client_secret'] = $this->clientSecret;
+        }
 
         // Convert token params to string format
         $token_params = http_build_query($token_params, null, '&', $this->enc_type);
 
-        $json = json_decode($this->fetchURL($token_endpoint, $token_params), false);
+        $json = json_decode($this->fetchURL($token_endpoint, $token_params, $headers), false);
+
+        // Throw an error if the server returns one
+        if (isset($token_json->error)) {
+            if (isset($token_json->error_description)) {
+                throw new OpenIDConnectProviderException($token_json->error_description);
+            }
+            throw new OpenIDConnectProviderException('Got response: ' . $token_json->error);
+        }
 
         if (isset($json->access_token)) {
             $this->accessToken = $json->access_token;
