@@ -24,6 +24,7 @@ namespace Jumbojett;
 
 use Error;
 use Exception;
+use Jumbojett\Exception\OpenIDConnectClientAccessDeniedException;
 use Jumbojett\Exception\OpenIDConnectConfigException;
 use Jumbojett\Exception\OpenIDConnectCurlException;
 use Jumbojett\Exception\OpenIDConnectJwkException;
@@ -128,6 +129,11 @@ class OpenIDConnectClient
      * @var string full system path to the SSL certificate
      */
     private $certPath;
+
+    /**
+     * @var string full system path to SSL certificates folder
+     */
+    private $certsCaPath;
 
     /**
      * @var bool Verify SSL peer on transactions
@@ -302,6 +308,7 @@ class OpenIDConnectClient
      * @throws OpenIDConnectJwkException
      * @throws OpenIDConnectPHPExtensionException
      * @throws OpenIDConnectRandException
+     * @throws OpenIDConnectClientAccessDeniedException
      */
     public function authenticate() {
         // Do a preemptive check to see if the provider has thrown an error from a previous redirect
@@ -318,6 +325,9 @@ class OpenIDConnectClient
             // Throw an error if the server returns one
             if (isset($token_json->error)) {
                 if (isset($token_json->error_description)) {
+                    if ($token_json->error === 'access_denied') {
+                        throw new OpenIDConnectClientAccessDeniedException($token_json->error_description);
+                    }
                     throw new OpenIDConnectProviderException($token_json->error_description);
                 }
                 throw new OpenIDConnectProviderException('Got response: ' . $token_json->error);
@@ -1211,13 +1221,17 @@ class OpenIDConnectClient
             curl_setopt($ch, CURLOPT_CAINFO, $this->certPath);
         }
 
-        if($this->verifyHost) {
+        if (isset($this->certsCaPath)) {
+            curl_setopt($ch, CURLOPT_CAPATH, $this->certsCaPath);
+        }
+
+        if ($this->verifyHost) {
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
         } else {
             curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
         }
 
-        if($this->verifyPeer) {
+        if ($this->verifyPeer) {
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         } else {
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -1299,7 +1313,8 @@ class OpenIDConnectClient
     /**
      * @param string $certPath
      */
-    public function setCertPath($certPath) {
+    public function setCertPath($certPath, $cainfo)
+    {
         $this->certPath = $certPath;
     }
 
@@ -1312,9 +1327,26 @@ class OpenIDConnectClient
     }
 
     /**
+     * @param string $capath Full system path to SSL certficates folder
+     */
+    public function setCertsCaPath($capath)
+    {
+        $this->certsCaPath = $capath;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getCertsCaPath()
+    {
+        return $this->certsCaPath;
+    }
+
+    /**
      * @param bool $verifyPeer
      */
-    public function setVerifyPeer($verifyPeer) {
+    public function setVerifyPeer($verifyPeer)
+    {
         $this->verifyPeer = $verifyPeer;
     }
 
