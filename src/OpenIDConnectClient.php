@@ -314,6 +314,9 @@ class OpenIDConnectClient
         // Do a preemptive check to see if the provider has thrown an error from a previous redirect
         if (isset($_REQUEST['error'])) {
             $desc = isset($_REQUEST['error_description']) ? ' Description: ' . $_REQUEST['error_description'] : '';
+            if ($_REQUEST['error'] === 'access_denied') {
+                throw new OpenIDConnectClientAccessDeniedException('Error: ' . $_REQUEST['error'] . $desc);
+            }
             throw new OpenIDConnectProviderException('Error: ' . $_REQUEST['error'] . $desc);
         }
 
@@ -325,9 +328,6 @@ class OpenIDConnectClient
             // Throw an error if the server returns one
             if (isset($token_json->error)) {
                 if (isset($token_json->error_description)) {
-                    if ($token_json->error === 'access_denied') {
-                        throw new OpenIDConnectClientAccessDeniedException($token_json->error_description);
-                    }
                     throw new OpenIDConnectProviderException($token_json->error_description);
                 }
                 throw new OpenIDConnectProviderException('Got response: ' . $token_json->error);
