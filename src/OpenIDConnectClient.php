@@ -1313,7 +1313,7 @@ class OpenIDConnectClient
     /**
      * @param string $certPath
      */
-    public function setCertPath($certPath, $cainfo)
+    public function setCertPath($certPath)
     {
         $this->certPath = $certPath;
     }
