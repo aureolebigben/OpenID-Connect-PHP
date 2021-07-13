@@ -736,10 +736,11 @@ class OpenIDConnectClient
      * (Defined in https://tools.ietf.org/html/rfc6749#section-4.3)
      *
      * @param boolean $bClientAuth Indicates that the Client ID and Secret be used for client authentication
-     * @throws OpenIDConnectConfigException
+     * @return mixed
      * @throws OpenIDConnectCurlException
      * @throws OpenIDConnectProviderException
-     * @return mixed
+     * @throws OpenIDConnectUnauthorizedException
+     * @throws OpenIDConnectConfigException
      */
     public function requestResourceOwnerToken($bClientAuth = FALSE) {
         $token_endpoint = $this->getProviderConfigValue('token_endpoint');
@@ -761,7 +762,7 @@ class OpenIDConnectClient
             if (in_array('client_secret_basic', $token_endpoint_auth_methods_supported, true)) {
                 $headers = ['Authorization: Basic ' . base64_encode(urlencode($this->clientID) . ':' . urlencode($this->clientSecret))];
             } else {
-                $post_data['client_id']     = $this->clientID;
+                $post_data['client_id'] = $this->clientID;
                 $post_data['client_secret'] = $this->clientSecret;
             }
         }
@@ -769,7 +770,19 @@ class OpenIDConnectClient
         // Convert token params to string format
         $post_params = http_build_query($post_data, null, '&', $this->enc_type);
 
-        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
+        $json = json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
+
+        if (isset($json->error)) {
+            if (isset($json->error_description)) {
+                if ($json->error === 'invalid_grant') {
+                    throw new OpenIDConnectUnauthorizedException($json->error_description);
+                }
+                throw new OpenIDConnectProviderException($json->error_description);
+            }
+            throw new OpenIDConnectProviderException('Got response: ' . $json->error);
+        }
+
+        return $json;
     }
 
 
